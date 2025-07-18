@@ -1,10 +1,10 @@
 package main
 
 import (
-  "log"
-  "time"
-  "time-tls-checker/cert"
-  "time-tls-checker/client"
+	"log"
+	"time"
+	"time-tls-checker/cert"
+	"time-tls-checker/client"
 )
 
 func main() {
@@ -23,12 +23,14 @@ func main() {
 
 	// 立即执行一次
 	cert.CheckAllNamespaces(clientset, alertThreshold)
+	cert.CheckMutatingWebhookCABundles(clientset, alertThreshold)
 
 	// 循环检查
 	for {
 		select {
 		case <-ticker.C:
 			cert.CheckAllNamespaces(clientset, alertThreshold)
+			cert.CheckMutatingWebhookCABundles(clientset, alertThreshold)
 		}
 	}
 }
