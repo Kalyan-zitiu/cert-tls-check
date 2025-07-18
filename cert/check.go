@@ -5,24 +5,26 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"time"
 )
 
-func CheckAllnamespaces(clientset *kubernetes.Clientset, alertThresholdDays int) {
+func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int) {
 	nsList, err := clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		fmt.Errorf("Error getting namespaces: %v\n", err)
+		fmt.Printf("Error getting namespaces: %v\n", err)
 		return
 	}
 
-	for _, ns = range nsList.Items {
+	for _, ns := range nsList.Items {
 		namespace := ns.Name
+
 		secrets, err := clientset.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{})
 		if err != nil {
-			fmt.Errorf("  Failed to list secrets in %s: %v\n", namespace, err)
+			fmt.Printf("  Failed to list secrets in %s: %v\n", namespace, err)
 			continue
 		}
 
@@ -30,29 +32,85 @@ func CheckAllnamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 			if secret.Type != corev1.SecretTypeTLS {
 				continue
 			}
-			certData, ok := secrets.Data["tls.crt"]
+			certData, ok := secret.Data["tls.crt"]
 			if !ok {
 				continue
 			}
-			block, _ := pem.Decode(certData)
-			if block == nil {
-				fmt.Printf("  Invalid PEM in %s/%s\n", namespace, secret.Name)
-				continue
-			}
 
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				fmt.Printf("  Failed to parse cert in %s/%s: %v\n", namespace, secret.Name, err)
-				continue
-			}
+			for {
+				var block *pem.Block
+				block, certData = pem.Decode(certData)
+				if block == nil {
+					break
+				}
 
-			daysLeft := int(cert.Notafter.Sub(time.Now().Hour()) / 24)
+				cert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					fmt.Printf("  Failed to parse cert in %s/%s: %v\n", namespace, secret.Name, err)
+					continue
+				}
 
-			if daysLeft < alertThresholdDays {
-				fmt.Printf("\u26a0\ufe0f  [ALERT] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
-					namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
+
+				switch {
+				case daysLeft < 0:
+					fmt.Printf("\u274C  [EXPIRED] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expired %d days ago (NotAfter: %s)\n",
+						namespace, secret.Name, cert.Subject.CommonName, -daysLeft, cert.NotAfter.Format("2006-01-02"))
+				case daysLeft < alertThresholdDays:
+					fmt.Printf("\u26A0\uFE0F  [ALERT] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
+						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				default:
+					fmt.Printf("\u2705  [INFO]  Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 %d days remaining (NotAfter: %s)\n",
+						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				}
 			}
 		}
 	}
+}
 
+// CheckMutatingWebhookCABundles checks the CA bundles of all MutatingWebhookConfigurations
+// and warns if a certificate is expiring within alertThresholdDays.
+func CheckMutatingWebhookCABundles(clientset *kubernetes.Clientset, alertThresholdDays int) {
+	configs, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Printf("Error listing MutatingWebhookConfigurations: %v\n", err)
+		return
+	}
+
+	for _, cfg := range configs.Items {
+		for _, hook := range cfg.Webhooks {
+			certData := hook.ClientConfig.CABundle
+			if len(certData) == 0 {
+				continue
+			}
+
+			remaining := certData
+			for {
+				var block *pem.Block
+				block, remaining = pem.Decode(remaining)
+				if block == nil {
+					break
+				}
+				cert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					fmt.Printf("  Failed to parse CA bundle in %s/%s: %v\n", cfg.Name, hook.Name, err)
+					break
+				}
+
+				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
+
+				switch {
+				case daysLeft < 0:
+					fmt.Printf("\u274C  [EXPIRED] Webhook: %-30s Hook: %-20s  \u2794 CA expired %d days ago (NotAfter: %s)\n",
+						cfg.Name, hook.Name, -daysLeft, cert.NotAfter.Format("2006-01-02"))
+				case daysLeft < alertThresholdDays:
+					fmt.Printf("\u26A0\uFE0F  [ALERT] Webhook: %-30s Hook: %-20s  \u2794 CA expiring in %d days (NotAfter: %s)\n",
+						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				default:
+					fmt.Printf("\u2705  [INFO]  Webhook: %-30s Hook: %-20s  \u2794 CA %d days remaining (NotAfter: %s)\n",
+						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				}
+			}
+		}
+	}
 }
