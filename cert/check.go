@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -51,7 +50,10 @@ func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 				}
 
 				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
-
+				if daysLeft < alertThresholdDays {
+					fmt.Printf("\u26A0\uFE0F  [List] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
+						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				}
 				if daysLeft < alertThresholdDays {
 					fmt.Printf("\u26A0\uFE0F  [ALERT] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
 						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
@@ -91,6 +93,10 @@ func CheckMutatingWebhookCABundles(clientset *kubernetes.Clientset, alertThresho
 				}
 
 				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
+				if daysLeft >= alertThresholdDays {
+					fmt.Printf("\u26A0\uFE0F  [List] Webhook: %-30s Hook: %-20s  \u2794 CA expiring in %d days (NotAfter: %s)\n",
+						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				}
 				if daysLeft < alertThresholdDays {
 					fmt.Printf("\u26A0\uFE0F  [ALERT] Webhook: %-30s Hook: %-20s  \u2794 CA expiring in %d days (NotAfter: %s)\n",
 						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
