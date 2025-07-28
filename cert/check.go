@@ -8,8 +8,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"regexp"
 	"time"
 )
+
+var certKeyRegex = regexp.MustCompile(`(?i)\.(crt|bundle)$`)
 
 func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int) {
 	nsList, err := clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
@@ -28,35 +31,34 @@ func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 		}
 
 		for _, secret := range secrets.Items {
-			if secret.Type != corev1.SecretTypeTLS {
-				continue
-			}
-			certData, ok := secret.Data["tls.crt"]
-			if !ok {
-				continue
-			}
-
-			for {
-				var block *pem.Block
-				block, certData = pem.Decode(certData)
-				if block == nil {
-					break
-				}
-
-				cert, err := x509.ParseCertificate(block.Bytes)
-				if err != nil {
-					fmt.Printf("  Failed to parse cert in %s/%s: %v\n", namespace, secret.Name, err)
+			for key, data := range secret.Data {
+				if !certKeyRegex.MatchString(key) {
 					continue
 				}
 
-				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
-				if daysLeft < alertThresholdDays {
-					fmt.Printf("\u26A0\uFE0F  [List] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
-						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
-				}
-				if daysLeft < alertThresholdDays {
-					fmt.Printf("\u26A0\uFE0F  [ALERT] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
-						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+				remaining := data
+				for {
+					var block *pem.Block
+					block, remaining = pem.Decode(remaining)
+					if block == nil {
+						break
+					}
+
+					cert, err := x509.ParseCertificate(block.Bytes)
+					if err != nil {
+						fmt.Printf("  Failed to parse cert in %s/%s (%s): %v\n", namespace, secret.Name, key, err)
+						continue
+					}
+
+					daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
+					if daysLeft < alertThresholdDays {
+						fmt.Printf("\u26A0\uFE0F  [List] Namespace: %-20s Secret: %-30s Key: %-15s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
+							namespace, secret.Name, key, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+					}
+					if daysLeft < alertThresholdDays {
+						fmt.Printf("\u26A0\uFE0F  [ALERT] Namespace: %-20s Secret: %-30s Key: %-15s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
+							namespace, secret.Name, key, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
+					}
 				}
 			}
 		}
