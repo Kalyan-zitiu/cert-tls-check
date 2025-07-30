@@ -11,11 +11,12 @@ import (
 	"time"
 )
 
-func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int) {
+func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int) int {
+	expiring := 0
 	nsList, err := clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		fmt.Printf("Error getting namespaces: %v\n", err)
-		return
+		return 0
 	}
 
 	for _, ns := range nsList.Items {
@@ -51,6 +52,7 @@ func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 
 				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
 				if daysLeft < alertThresholdDays {
+					expiring++
 					fmt.Printf("\u26A0\uFE0F  [List] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
 						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
 				}
@@ -61,15 +63,18 @@ func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 			}
 		}
 	}
+
+	return expiring
 }
 
 // CheckMutatingWebhookCABundles checks the CA bundles of all MutatingWebhookConfigurations
 // and warns if a certificate is expiring within alertThresholdDays.
-func CheckMutatingWebhookCABundles(clientset *kubernetes.Clientset, alertThresholdDays int) {
+func CheckMutatingWebhookCABundles(clientset *kubernetes.Clientset, alertThresholdDays int) int {
+	expiring := 0
 	configs, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		fmt.Printf("Error listing MutatingWebhookConfigurations: %v\n", err)
-		return
+		return 0
 	}
 
 	for _, cfg := range configs.Items {
@@ -98,10 +103,13 @@ func CheckMutatingWebhookCABundles(clientset *kubernetes.Clientset, alertThresho
 						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
 				}
 				if daysLeft < alertThresholdDays {
+					expiring++
 					fmt.Printf("\u26A0\uFE0F  [ALERT] Webhook: %-30s Hook: %-20s  \u2794 CA expiring in %d days (NotAfter: %s)\n",
 						cfg.Name, hook.Name, daysLeft, cert.NotAfter.Format("2006-01-02"))
 				}
 			}
 		}
 	}
+
+	return expiring
 }
