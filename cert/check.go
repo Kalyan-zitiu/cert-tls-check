@@ -51,7 +51,7 @@ func CheckAllNamespaces(clientset *kubernetes.Clientset, alertThresholdDays int)
 				}
 
 				daysLeft := int(cert.NotAfter.Sub(time.Now()).Hours() / 24)
-				if daysLeft < alertThresholdDays {
+				if daysLeft >= alertThresholdDays {
 					expiring++
 					fmt.Printf("\u26A0\uFE0F  [List] Namespace: %-20s Secret: %-30s Subject: %-40s  \u2794 Expiring in %d days (NotAfter: %s)\n",
 						namespace, secret.Name, cert.Subject.CommonName, daysLeft, cert.NotAfter.Format("2006-01-02"))
